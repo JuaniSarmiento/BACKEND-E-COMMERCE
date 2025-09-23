@@ -1,7 +1,18 @@
 # En backend/schemas/product_schemas.py
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional,List
+
+# --- CAMBIO NUEVO: Schema para las Variantes ---
+class VarianteProducto(BaseModel):
+    id: int
+    producto_id: int
+    tamanio: str
+    color: str
+    cantidad_en_stock: int
+
+    class Config:
+        from_attributes = True
 
 # Schema base del producto, con los campos comunes
 class ProductBase(BaseModel):
@@ -9,6 +20,7 @@ class ProductBase(BaseModel):
     descripcion: Optional[str] = None
     precio: float
     sku: str
+    urls_imagenes: Optional[str] = None #CAMBIO NUEVO!!!
     material: Optional[str] = None
     talle: Optional[str] = None
     color: Optional[str] = None
@@ -25,6 +37,7 @@ class ProductUpdate(BaseModel):
     descripcion: Optional[str] = None
     precio: Optional[float] = None
     sku: Optional[str] = None
+    urls_imagenes: Optional[str] = None
     material: Optional[str] = None
     talle: Optional[str] = None
     color: Optional[str] = None
@@ -34,6 +47,6 @@ class ProductUpdate(BaseModel):
 # Schema para mostrar un producto en la base de datos (incluye el id)
 class Product(ProductBase):
     id: int
-
+    variantes: List[VarianteProducto] = [] #CAMBIO NUEVO!!!
     class Config:
-        from_attributes = True # Permite que Pydantic lea los datos desde un objeto de SQLAlchemy
+        from_attributes = True # Permite que Pydantic lea los datos desde un objeto de SQLAlchemy
