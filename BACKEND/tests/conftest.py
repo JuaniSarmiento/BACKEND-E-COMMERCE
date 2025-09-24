@@ -8,17 +8,17 @@ from httpx import AsyncClient, ASGITransport
 import mongomock
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import select
+from sqlalchemy.orm import joinedload
 
 # Add the project root to the Python path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-
 # --- Importaciones de tu app ---
 from main import app
-# Importaciones SQL
 from database.database import get_db
-from database.models import Producto, Base
-# Importaciones NoSQL
+# --- ¡AHORA SÍ, EL IMPORT COMPLETO Y CORRECTO! ---
+from database.models import Producto, Base, Categoria
 from database.database import get_db_nosql
 from utils.security import get_password_hash, create_access_token
 
@@ -76,6 +76,11 @@ TestingSessionLocal = sessionmaker(
     autocommit=False, autoflush=False, bind=test_engine, class_=AsyncSession
 )
 
+@pytest_asyncio.fixture(autouse=True)
+async def override_engine(monkeypatch):
+    """Patches the engine in database.database to use the test_engine."""
+    monkeypatch.setattr("database.database.engine", test_engine)
+
 @pytest_asyncio.fixture(scope="function")
 async def db_sql():
     """Fixture para la sesión de DB SQL (usada por Products)"""
@@ -107,7 +112,7 @@ async def client() -> AsyncClient:
 
 # --- Fixtures de datos de prueba (NoSQL) ---
 @pytest_asyncio.fixture
-async def test_user(db_nosql): # Depende de db_nosql
+async def test_user(db_nosql):
     user_data = {
         "username": "testuser",
         "email": "testuser@example.com",
@@ -116,17 +121,12 @@ async def test_user(db_nosql): # Depende de db_nosql
         "hashed_password": get_password_hash("password"),
         "role": "user",
     }
-    
-    # --- FIX ---
-    # Capturamos el resultado y añadimos el _id al dict
-    # para que el fixture 'authenticated_client' pueda crear el token.
     result = await db_nosql.users.insert_one(user_data)
     user_data["_id"] = result.inserted_id
-    
     return user_data
 
 @pytest_asyncio.fixture
-async def test_admin(db_nosql): # Depende de db_nosql
+async def test_admin(db_nosql):
     admin_data = {
         "username": "adminuser",
         "email": "admin@example.com",
@@ -140,7 +140,7 @@ async def test_admin(db_nosql): # Depende de db_nosql
     return admin_data
 
 @pytest_asyncio.fixture
-async def test_product_nosql(db_nosql): # Depende de db_nosql
+async def test_product_nosql(db_nosql):
     """Producto de prueba en NoSQL (para tests de Carrito)"""
     product_data = {
         "name": "Test Product NoSQL",
@@ -156,29 +156,39 @@ async def test_product_nosql(db_nosql): # Depende de db_nosql
     product_data["_id"] = result.inserted_id
     return product_data
 
-# NUEVO: Fixture de producto SQL
+# --- Fixture de producto SQL (VERSION FINAL Y ROBUSTA) ---
 @pytest_asyncio.fixture
-async def test_product_sql(db_sql: AsyncSession): # Depende de db_sql
+async def test_product_sql(db_sql: AsyncSession, test_category: Categoria):
     """Producto de prueba en SQL (para tests de Productos)"""
     product_data = {
         "nombre": "Test Product SQL",
         "descripcion": "A product for testing",
         "precio": 10.99,
         "sku": "SQL-SKU-123",
-        "material": "Algodon",
-        "talle": "M",
-        "color": "Negro",
         "stock": 100,
-        "categoria_id": 1
+        "categoria_id": test_category.id
     }
     new_product = Producto(**product_data)
     db_sql.add(new_product)
     await db_sql.commit()
-    await db_sql.refresh(new_product)
+    
+    # Recargamos el objeto para asegurarnos que todo esté cargado
+    await db_sql.refresh(new_product, attribute_names=["variantes", "categoria"])
+    
     return new_product
 
+# --- NUEVA FIXTURE DE CATEGORÍA ---
 @pytest_asyncio.fixture
-def test_variant(test_product_nosql: dict): # Depende del producto NoSQL
+async def test_category(db_sql: AsyncSession):
+    """Crea una categoría de prueba para que los productos puedan usarla."""
+    new_category = Categoria(nombre="Ropa de Prueba Para Crear")
+    db_sql.add(new_category)
+    await db_sql.commit()
+    await db_sql.refresh(new_category)
+    return new_category
+
+@pytest_asyncio.fixture
+def test_variant(test_product_nosql: dict):
     """Returns a variant from the test product."""
     variant = test_product_nosql["variantes"][0]
     return {
@@ -194,7 +204,7 @@ def test_variant(test_product_nosql: dict): # Depende del producto NoSQL
 async def authenticated_client(client: AsyncClient, test_user: dict) -> AsyncClient:
     token_data = {
         "sub": test_user["email"], 
-        "user_id": str(test_user.get("_id")), # .get() para seguridad
+        "user_id": str(test_user.get("_id")),
         "role": test_user.get("role", "user")
     }
     token = create_access_token(token_data)
@@ -205,7 +215,7 @@ async def authenticated_client(client: AsyncClient, test_user: dict) -> AsyncCli
 async def admin_authenticated_client(client: AsyncClient, test_admin: dict) -> AsyncClient:
     token_data = {
         "sub": test_admin["email"], 
-        "user_id": str(test_admin.get("_id")), # .get() para seguridad
+        "user_id": str(test_admin.get("_id")),
         "role": test_admin.get("role", "admin")
     }
     token = create_access_token(token_data)

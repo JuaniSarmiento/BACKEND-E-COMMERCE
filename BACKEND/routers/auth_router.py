@@ -8,7 +8,6 @@ from datetime import datetime
 from schemas import user_schemas
 from utils import security
 from database.database import get_db_nosql
-# Importamos el servicio para obtener el usuario actual
 from services import auth_services as auth_service
 
 router = APIRouter(
@@ -27,7 +26,6 @@ async def register_user(user: user_schemas.UserCreate, db: Database = Depends(ge
 
     hashed_password = security.get_password_hash(user.password)
     
-    # Preparamos el documento del usuario para guardar en MongoDB
     user_document = user.model_dump()
     user_document["hashed_password"] = hashed_password
     del user_document["password"]
@@ -38,10 +36,6 @@ async def register_user(user: user_schemas.UserCreate, db: Database = Depends(ge
     result = await db.users.insert_one(user_document)
     created_user = await db.users.find_one({"_id": result.inserted_id})
     
-    # --- FIX ---
-    # Devolvemos el dict 'created_user'.
-    # FastAPI usará el 'response_model=user_schemas.UserOut' 
-    # para validarlo y serializarlo (convirtiendo _id a id).
     return created_user
 
 @router.post("/login", response_model=user_schemas.Token)
@@ -73,19 +67,4 @@ async def read_users_me(current_user: user_schemas.UserOut = Depends(auth_servic
     """
     return current_user
 
-@router.post("/promote/{user_email}", status_code=status.HTTP_200_OK, summary="Promover usuario a admin")
-async def promote_to_admin(
-    user_email: str,
-    db: Database = Depends(get_db_nosql),
-    admin_user: user_schemas.UserOut = Depends(auth_service.get_current_admin_user)
-):
-    user_to_promote = await db.users.find_one({"email": user_email})
-    if not user_to_promote:
-        raise HTTPException(status_code=status.HTTP_44_NOT_FOUND, detail="Usuario no encontrado.")
-
-    await db.users.update_one(
-        {"email": user_email},
-        {"$set": {"role": "admin"}}
-    )
-
-    return {"message": f"El usuario {user_email} ha sido promovido a administrador."}
+# ¡LISTO! EL ENDPOINT DE PROMOTE YA NO ESTÁ ACÁ.
