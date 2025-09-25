@@ -20,7 +20,7 @@ class ProductBase(BaseModel):
     descripcion: Optional[str] = None
     precio: float
     sku: str
-    urls_imagenes: Optional[str] = None #CAMBIO NUEVO!!!
+    urls_imagenes: Optional[List[str]] = None # <-- Ahora es una lista de strings
     material: Optional[str] = None
     talle: Optional[str] = None
     color: Optional[str] = None
@@ -37,7 +37,7 @@ class ProductUpdate(BaseModel):
     descripcion: Optional[str] = None
     precio: Optional[float] = None
     sku: Optional[str] = None
-    urls_imagenes: Optional[str] = None
+    urls_imagenes: Optional[List[str]] = None # <-- También acá
     material: Optional[str] = None
     talle: Optional[str] = None
     color: Optional[str] = None

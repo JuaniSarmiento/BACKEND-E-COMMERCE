@@ -24,7 +24,13 @@ class Producto(Base):
     descripcion = Column(Text, nullable=True)
     precio = Column(DECIMAL(10, 2), nullable=False)
     sku = Column(String(100), unique=True, nullable=False)
-    urls_imagenes = Column(Text, nullable=True)
+    
+    # --- ¡CAMBIO CLAVE! ---
+    # Cambiamos Text por JSON. Esto permite guardar una lista de URLs
+    # de forma nativa en la base de datos.
+    urls_imagenes = Column(JSON, nullable=True)
+    # --- FIN DEL CAMBIO ---
+
     material = Column(String(100), nullable=True)
     talle = Column(String(50), nullable=True)
     color = Column(String(50), nullable=True)
