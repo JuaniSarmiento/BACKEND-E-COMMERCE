@@ -15,6 +15,8 @@ from database.models import VarianteProducto, Producto
 from services import auth_services, cloudinary_service # <-- ¡Importamos el nuevo servicio!
 from schemas import product_schemas, user_schemas
 from database.database import get_db
+from fastapi import Form, File, UploadFile
+import json
 
 
 router = APIRouter(
@@ -59,7 +61,9 @@ async def get_product(product_id: int, db: AsyncSession = Depends(get_db)):
 )
 async def create_variant_for_product(
     product_id: int,
-    variant_in: product_schemas.VarianteProducto, # OJO: El schema de variante necesita un `producto_id` opcional o sacarlo de acá
+    # --- ¡ESTE ES EL ARREGLO! ---
+    # Ahora le pedimos el schema correcto, que solo tiene los campos que manda el formulario.
+    variant_in: product_schemas.VarianteProductoCreate, 
     db: AsyncSession = Depends(get_db),
     current_admin: user_schemas.UserOut = Depends(auth_services.get_current_admin_user)
 ):
@@ -67,14 +71,18 @@ async def create_variant_for_product(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
 
-    # Creamos un diccionario a partir del schema de entrada y le agregamos el ID del producto
+    # El resto de la lógica funciona perfecto con este cambio
     variant_data = variant_in.model_dump()
-    variant_data['producto_id'] = product_id
+    
+    new_variant = VarianteProducto(
+        **variant_data,
+        producto_id=product_id  # Agregamos el ID del producto que viene en la URL
+    )
 
-    new_variant = VarianteProducto(**variant_data)
     db.add(new_variant)
     await db.commit()
     await db.refresh(new_variant)
+    
     return new_variant
 
 # --- POST PARA CREAR PRODUCTO (ACÁ ESTÁ LA MAGIA NUEVA) ---
@@ -137,18 +145,56 @@ async def create_product(
 
 # --- PUT (CORREGIDO, sin cambios funcionales pero consistente) ---
 @router.put("/{product_id}", response_model=product_schemas.Product, summary="Actualizar un producto (Solo Admins)")
-async def update_product(product_id: int, product_in: product_schemas.ProductUpdate, db: AsyncSession = Depends(get_db), current_admin: user_schemas.UserOut = Depends(auth_services.get_current_admin_user)):
+async def update_product(
+    product_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_admin: user_schemas.UserOut = Depends(auth_services.get_current_admin_user),
+    # Recibimos todos los campos como Form, igual que en create_product
+    nombre: str = Form(...),
+    descripcion: Optional[str] = Form(None),
+    precio: float = Form(...),
+    sku: str = Form(...),
+    stock: int = Form(...),
+    categoria_id: int = Form(...),
+    material: Optional[str] = Form(None),
+    talle: Optional[str] = Form(None),
+    color: Optional[str] = Form(None),
+    # Las imágenes nuevas son opcionales al editar
+    images: List[UploadFile] = File(None),
+    # Recibimos las URLs de las imágenes que ya existen como un texto
+    existing_images_json: str = Form("[]")
+):
     product_db = await db.get(Producto, product_id)
     if not product_db:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Producto no encontrado")
-    
-    update_data = product_in.model_dump(exclude_unset=True)
-    for key, value in update_data.items():
-        setattr(product_db, key, value)
-    
+
+    # 1. Subir las imágenes nuevas (si el admin mandó alguna)
+    new_image_urls = []
+    if images and images[0].filename:
+        new_image_urls = await cloudinary_service.upload_images(images)
+
+    # 2. Combinar las URLs viejas con las nuevas
+    # (Acá podrías agregar lógica para eliminar imágenes, pero por ahora las sumamos)
+    existing_urls = json.loads(existing_images_json)
+    all_urls = existing_urls + new_image_urls
+
+    # 3. Actualizamos el objeto de la base de datos campo por campo
+    product_db.nombre = nombre
+    product_db.descripcion = descripcion
+    product_db.precio = precio
+    product_db.sku = sku
+    product_db.stock = stock
+    product_db.categoria_id = categoria_id
+    product_db.material = material
+    product_db.talle = talle
+    product_db.color = color
+    product_db.urls_imagenes = all_urls
+
     db.add(product_db)
     await db.commit()
+    await db.refresh(product_db)
 
+    # Devolvemos el producto actualizado con todas sus relaciones cargadas
     query = select(Producto).options(joinedload(Producto.variantes)).filter(Producto.id == product_id)
     result = await db.execute(query)
     updated_product = result.scalars().unique().first()

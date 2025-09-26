@@ -38,11 +38,21 @@ class ManualSaleCreate(BaseModel):
     items: List[SaleItemCreate]
     # Se elimina el campo 'total', ahora se calcula en el backend por seguridad
 
+class VarianteProductoInfo(BaseModel): # <-- NUEVO SCHEMA
+    color: str
+    tamanio: str
+    producto_nombre: str = Field(..., alias="nombre")
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
 # NUEVO: Un esquema para mostrar prolijamente cada item en una orden devuelta
 class DetalleOrdenOut(BaseModel):
     variante_producto_id: int
     cantidad: int
     precio_en_momento_compra: float
+    variante_producto: VarianteProductoInfo
 
     class Config:
         from_attributes = True

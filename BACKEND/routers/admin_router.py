@@ -44,6 +44,28 @@ async def get_sales(db: AsyncSession = Depends(get_db)):
     sales = result.scalars().unique().all()
     return sales
 
+@router.get("/sales/{order_id}", response_model=admin_schemas.Orden, summary="Obtener detalles de una orden específica")
+async def get_sale_details(order_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    Obtiene todos los detalles de una única orden, incluyendo los productos
+    comprados en ella.
+    """
+    result = await db.execute(
+        select(Orden)
+        .where(Orden.id == order_id)
+        .options(
+            joinedload(Orden.detalles) # Cargamos los detalles de la orden
+            .joinedload(DetalleOrden.variante_producto) # De cada detalle, cargamos la variante
+            .joinedload(VarianteProducto.producto) # De cada variante, cargamos el producto padre
+        )
+    )
+    order = result.scalars().unique().first()
+
+    if not order:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Orden no encontrada")
+    
+    return order
+
 @router.post("/sales", status_code=201)
 async def create_manual_sale(sale_data: admin_schemas.ManualSaleCreate, db: AsyncSession = Depends(get_db)):
     total_calculado = 0
@@ -100,10 +122,9 @@ async def create_manual_sale(sale_data: admin_schemas.ManualSaleCreate, db: Asyn
 
 @router.get("/users", response_model=List[user_schemas.UserOut])
 async def get_users(db: Database = Depends(get_db_nosql)):
-    users = []
-    async for user in db.users.find({}):
-        users.append(user_schemas.UserOut(**user))
-    return users
+    users_cursor = db.users.find({})
+    users_list = await users_cursor.to_list(length=None)
+    return users_list
 
 @router.put("/users/{user_id}/role", response_model=user_schemas.UserOut, summary="Actualizar rol de un usuario")
 async def update_user_role(user_id: str, user_update: user_schemas.UserUpdateRole, db: Database = Depends(get_db_nosql)):
