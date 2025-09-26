@@ -10,58 +10,84 @@ from database.models import ConversacionIA
 
 router = APIRouter(prefix="/api/chatbot", tags=["Chatbot"])
 
-# --- CONFIGURACIÓN DE LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Constante para limitar la cantidad de turnos de conversación que enviamos a la IA.
+# 5 turnos = 10 mensajes (5 del usuario, 5 de la IA). Evita prompts gigantes.
+CONTEXT_TURNS_LIMIT = 5
+
+
+async def _handle_chat_exception(
+    e: Exception,
+    conversacion: ConversacionIA,
+    db: AsyncSession,
+    detail: str,
+    status_code: int = 500
+):
+    error_msg = f"{detail}: {e}"
+    logger.error(error_msg, exc_info=True)
+    conversacion.respuesta = f"ERROR: {error_msg}"
+    db.add(conversacion)
+    await db.commit()
+    raise HTTPException(status_code=status_code, detail=detail)
+
 
 @router.post("/query", response_model=chatbot_schemas.ChatResponse)
 async def handle_chat_query(query: chatbot_schemas.ChatQuery, db: AsyncSession = Depends(get_db)):
     """
-    Gestiona una consulta del usuario al chatbot, se comunica con la IA
-    y guarda el historial de la conversación.
+    Endpoint robusto para consultas al chatbot.
+    Maneja el historial y el contexto de forma inteligente.
     """
+    # 1. Guardamos la nueva pregunta del usuario en la DB
+    nueva_conversacion = ConversacionIA(
+        sesion_id=query.sesion_id,
+        prompt=query.pregunta,
+        respuesta=""
+    )
+    db.add(nueva_conversacion)
+    await db.commit()
+    await db.refresh(nueva_conversacion)
+
     try:
-        # 1. Buscar el historial previo de esta sesión en nuestra DB SQL
+        # 2. Obtenemos el historial completo de la sesión
         result = await db.execute(
             select(ConversacionIA)
             .filter(ConversacionIA.sesion_id == query.sesion_id)
             .order_by(ConversacionIA.creado_en)
         )
-        db_history = result.scalars().all()
+        full_db_history = result.scalars().all()
 
-        # 2. Guardamos la pregunta actual del usuario en la DB ANTES de llamar a la IA.
-        #    Esto es una buena práctica para no perder el prompt del usuario si la IA falla.
-        nueva_conversacion = ConversacionIA(
-            sesion_id=query.sesion_id,
-            prompt=query.pregunta,
-            respuesta=""  # La respuesta queda vacía por ahora
+        # 3. Limitamos el historial a los últimos turnos para eficiencia
+        limited_history = full_db_history[-(CONTEXT_TURNS_LIMIT * 2):]
+
+        # 4. Preparamos el contexto y las instrucciones por separado
+        catalog_context = await ia_service.get_catalog_from_db(db)
+        system_prompt = ia_service.get_chatbot_system_prompt() # Solo la personalidad
+
+        # 5. Llamamos al servicio de IA con los componentes bien definidos
+        respuesta_ia = await ia_service.get_ia_response(
+            system_prompt=system_prompt,
+            catalog_context=catalog_context,
+            chat_history=limited_history
         )
-        db.add(nueva_conversacion)
-        await db.commit()
-        await db.refresh(nueva_conversacion)
-        
-        # Añadimos la pregunta actual al historial que usaremos para la consulta
-        # No es necesario añadirla a db_history para build_gemini_history, ya que la nueva pregunta
-        # se pasa por separado a get_gemini_response.
 
-        # 3. Obtenemos el catálogo de productos y el prompt del sistema
-        dynamic_catalog = await ia_service.get_catalog_from_db(db)
-        system_prompt = ia_service.get_chatbot_system_prompt()
-        full_system_prompt = f"{system_prompt}\n\n{dynamic_catalog}"
-
-        # 4. Construimos el historial en el formato que le gusta a Gemini
-        gemini_history = ia_service.build_gemini_history(db_history)
-
-        # 5. Obtenemos la respuesta de Gemini, enviando solo la pregunta nueva
-        respuesta_ia = ia_service.get_gemini_response(full_system_prompt, gemini_history, query.pregunta)
-
-        # 6. Ahora que tenemos la respuesta, actualizamos nuestra DB
+        # 6. Actualizamos la conversación en la DB con la respuesta final
         nueva_conversacion.respuesta = respuesta_ia
         db.add(nueva_conversacion)
         await db.commit()
 
         return chatbot_schemas.ChatResponse(respuesta=respuesta_ia)
 
+    except ia_service.OpenRouterServiceError as e:
+        await _handle_chat_exception(
+            e, nueva_conversacion, db,
+            detail="Error en el servicio de IA (OpenRouter).",
+            status_code=503
+        )
     except Exception as e:
-        logger.error(f"Error inesperado en el endpoint del chatbot: {e}")
-        raise HTTPException(status_code=500, detail="Ocurrió un error interno en el chatbot.")
+        await _handle_chat_exception(
+            e, nueva_conversacion, db,
+            detail="Error interno en el chatbot.",
+            status_code=500
+        )
